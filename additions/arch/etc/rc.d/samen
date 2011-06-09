@@ -9,9 +9,14 @@ daemon_name=samen
 case "$1" in
   start)
     stat_busy "Starting $daemon_name"
-    ifconfig $INTERFACE up
-    wpa_supplicant -D$DRIVER -i$INTERFACE -c$CONFIG_FILE $EXTRA_ARGS -B
-    wpa_cli -B -a /usr/sbin/samen-handler
+    ps ax | grep wpa_supplicant | grep $INTERFACE | grep -v grep > /dev/null 2>&1
+    if [ $? -eq 0 ] ; then
+      stat_die
+      exit 1
+    fi
+    ifconfig $INTERFACE up > /dev/null 2>&1
+    wpa_supplicant -D$DRIVER -i$INTERFACE -c$CONFIG_FILE $EXTRA_ARGS -B > /dev/null 2>&1
+    wpa_cli -B -a /usr/sbin/samen-handler > /dev/null 2>&1
     if [ $? -gt 0 ]; then
       stat_die
     else
@@ -22,11 +27,11 @@ case "$1" in
 
   stop)
     stat_busy "Stopping $daemon_name"
-    killall wpa_supplicant
+    killall wpa_supplicant > /dev/null 2>&1
     if [ $? -gt 0 ]; then
       stat_die
     else
-      ifconfig $INTERFACE down
+      ifconfig $INTERFACE down > /dev/null 2>&1
       rm_daemon $daemon_name
       stat_done
     fi
