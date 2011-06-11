@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
   #define SCRIPT_PATH "/etc/samen/"
 #endif
 
+int dhcp_client_stop(char* interface);
+ 
 char executable_exists(char* name) {
 	char cmd[64 + strlen(name)];
 	sprintf(cmd, "which \"%s\" > /dev/null 2>&1", name);
@@ -32,6 +34,7 @@ char executable_exists(char* name) {
 }
 
 int dhcp_client_start(char* interface) {
+	dhcp_client_stop(interface);
 	char command[32 + strlen(interface)];
 	if(executable_exists("dhcpcd"))
 		strcpy(command, "dhcpcd");
