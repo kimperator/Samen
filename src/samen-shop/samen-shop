@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #############################################
 #              samen-shop
 #
@@ -7,7 +7,8 @@
 #
 # copyright by sylence, 2008
 # http://sylence.cc/projects/wiremore/
-# Extended for Samen use by Kai Uwe Jesussek, 2011
+# Extended for Samen Service by
+#  Kai Uwe Jesussek, 2011
 #
 #############################################
 
@@ -15,7 +16,6 @@
 #
 PATH="/sbin:/usr/sbin:/usr/local/sbin:/bin:/usr/bin:/usr/local/bin"
 WPA_SUPPLICANT_SOCKETDIR="/var/run/wpa_supplicant"
-SAMEN_SERVICE="/etc/rc.d/samen"
 #
 ##############################################
 
@@ -55,6 +55,16 @@ function environment_set() {
 		"$CMD" -h >/dev/null 2>&1
 		test "$?" != "127" || { ERRORMSG="Error: Program '$CMD' not available!"; return 1; }
 	done
+	
+	if [ -e "/etc/rc.d/samen" ]; then
+		SAMEN_SERVICE="/etc/rc.d/samen"
+	elif [ -e "/etc/init.d/samen" ]; then
+		SAMEN_SERVICE="/etc/init.d/samen"
+	else
+		echo "couldn't find samen service script"
+		exit 1
+	fi	
+
 	# create tempfile
 	TMPFILE=`$MKTEMP -t samen-shop.XXXXXX`
 }
@@ -84,81 +94,87 @@ function help_print() {
 }
 
 function mainmenu_show() {
-while true; do
-	dialog --backtitle "$TITLE ($IFACE)" --title "Main Menu" --cancel-label "Quit" --menu "[UP] [DOWN] to move, [Enter] to select" 15 50 8 "Scan" "for networks" "Show" "connection status" "Add" "network (manual)" "Kill" "Samen Service" "Start" "Samen Service" "Save" "wpa_supplicant.conf" "Quit" "samen-shop" 2>$TMPFILE
-	test "$?" = "0" || echo "Quit" >$TMPFILE
-	case `cat $TMPFILE` in
-		"Scan")
-		networklist_show
-		;;
-		"Show")
-		status_show
-		;;
-		"Add")
-		network_add_show
-		;;
-		"Kill")
-		samen_service_kill
-		;;
-		"Start")
-		samen_service_start
-		;;
-		"Save")
-		wpa_supplicant_save
-		;;
-		"Quit")
-		cleanup
-		;;
-	esac
-done
+	while true; do
+		samen_service_alive
+		if [ $? -eq 0 ]; then
+			dialog --backtitle "$TITLE ($IFACE)" --title "Main Menu" --cancel-label "Quit" --menu "[UP] [DOWN] to move, [Enter] to select" 15 50 8 "Scan" "for networks" "Show" "connection status" "Add" "network (manual)" "Start" "Samen Service" "Save" "wpa_supplicant.conf" "Quit" "samen-shop" 2>$TMPFILE
+		else
+			dialog --backtitle "$TITLE ($IFACE)" --title "Main Menu" --cancel-label "Quit" --menu "[UP] [DOWN] to move, [Enter] to select" 15 50 8 "Scan" "for networks" "Show" "connection status" "Add" "network (manual)" "Kill" "Samen Service" "Save" "wpa_supplicant.conf" "Quit" "samen-shop" 2>$TMPFILE
+		fi
+
+		test "$?" = "0" || echo "Quit" >$TMPFILE
+		case `cat $TMPFILE` in
+			"Scan")
+			networklist_show
+			;;
+			"Show")
+			status_show
+			;;
+			"Add")
+			network_add_show
+			;;
+			"Kill")
+			samen_service_kill
+			;;
+			"Start")
+			samen_service_start
+			;;
+			"Save")
+			wpa_supplicant_save
+			;;
+			"Quit")
+			cleanup
+			;;
+		esac
+	done
 }
 
 function networklist_scan() {
-# returns 0/true on successfull scan (no results/error: 1)
-# reset old scan results
-unset NETWORK_ADDRESS NETWORK_ESSID NETWORK_CHANNEL NETWORK_QUALITY NETWORK_ENCRYPTION
-SCAN_RESULTS=`iwlist $IFACE scan 2>&1`
-# bring the interface up, if it's down
-if [ "`echo $SCAN_RESULTS | awk '$0 ~ /Network is down/'`" ]; then
-	$IFCONFIG $IFACE up
+	# returns 0/true on successfull scan (no results/error: 1)
+	# reset old scan results
+	dialog --backtitle "$TITLE ($IFACE)" --infobox "  Scanning..." 3 20
+	unset NETWORK_ADDRESS NETWORK_ESSID NETWORK_CHANNEL NETWORK_QUALITY NETWORK_ENCRYPTION
 	SCAN_RESULTS=`iwlist $IFACE scan 2>&1`
-fi
-NETWORK_NR=0
-# did we get any scan results?
-test "`echo $SCAN_RESULTS | awk '$0 ~ /Cell/'`" || return 1
-while read CELL; do
-	NETWORK_NR=$NETWORK_NR+1
-	NETWORK_ADDRESS[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Address:[ ]*\([:0-9A-F]*\).*/\1/p'`
-	NETWORK_ESSID[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*ESSID:"\(.*\)".*/\1/p'`
-	test -z "${NETWORK_ESSID[$NETWORK_NR]}" && NETWORK_ESSID[$NETWORK_NR]="<hidden>"
-	NETWORK_CHANNEL[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Channel[ ]*\([0-9]*\).*/\1/p'`
-	NETWORK_QUALITY[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Quality=\([0-9]*\)\/.*/\1/p'`
-	NETWORK_ENCRYPTION[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Encryption key:[ ]*\([a-zA-Z]*\).*/\1/p'`
-	if [ ${NETWORK_ENCRYPTION[$NETWORK_NR]} = "on" ]; then
-		NETWORK_ENCRYPTION[$NETWORK_NR]=`echo "$CELL" | awk '
-		BEGIN { ORS=""; enc=""; x=1 };
-		{ while (x <= NF) {
-			if ($x == "WPA") { print "[WPA-" }
-			if ($x ~ /WPA2/) { print "[WPA2-" }
-			#if ($x ~ /TKIP/) { print "TKIP-" }
-			#if ($x ~ /CCMP/) { print "CCMP-" }
-			if ($x ~ /PSK/) { print "PSK] "}
-			if ($x ~ /802.1x/) { print "EAP] "}
-			x=x+1
+	# bring the interface up, if it's down
+	if [ "`echo $SCAN_RESULTS | awk '$0 ~ /Network is down/'`" ]; then
+		$IFCONFIG $IFACE up
+		SCAN_RESULTS=`iwlist $IFACE scan 2>&1`
+	fi
+	NETWORK_NR=0
+	# did we get any scan results?
+	test "`echo $SCAN_RESULTS | awk '$0 ~ /Cell/'`" || return 1
+	while read CELL; do
+		NETWORK_NR=$NETWORK_NR+1
+		NETWORK_ADDRESS[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Address:[ ]*\([:0-9A-F]*\).*/\1/p'`
+		NETWORK_ESSID[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*ESSID:"\(.*\)".*/\1/p'`
+		test -z "${NETWORK_ESSID[$NETWORK_NR]}" && NETWORK_ESSID[$NETWORK_NR]="<hidden>"
+		NETWORK_CHANNEL[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Channel[ ]*\([0-9]*\).*/\1/p'`
+		NETWORK_QUALITY[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Quality=\([0-9]*\)\/.*/\1/p'`
+		NETWORK_ENCRYPTION[$NETWORK_NR]=`echo "$CELL" | sed -n 's/.*Encryption key:[ ]*\([a-zA-Z]*\).*/\1/p'`
+		if [ ${NETWORK_ENCRYPTION[$NETWORK_NR]} = "on" ]; then
+			NETWORK_ENCRYPTION[$NETWORK_NR]=`echo "$CELL" | awk '
+			BEGIN { ORS=""; enc=""; x=1 };
+			{ while (x <= NF) {
+				if ($x == "WPA") { print "[WPA-" }
+				if ($x ~ /WPA2/) { print "[WPA2-" }
+				#if ($x ~ /TKIP/) { print "TKIP-" }
+				#if ($x ~ /CCMP/) { print "CCMP-" }
+				if ($x ~ /PSK/) { print "PSK] "}
+				if ($x ~ /802.1x/) { print "EAP] "}
+				x=x+1
+			}
 		}
-	}
-	END  { print "\n" }'`
-	test -z "${NETWORK_ENCRYPTION[$NETWORK_NR]}" && NETWORK_ENCRYPTION[$NETWORK_NR]="[WEP]"
-else
-	NETWORK_ENCRYPTION[$NETWORK_NR]="[OPN]"
-fi
-	done <<< "`echo "$SCAN_RESULTS" | awk 'BEGIN { ORS=""; cell=0 }; $2 > 1 && $1 == "Cell" { print "\n" }; $1 == "Cell" { cell=$2; gsub(/^[ ]+/,"") }; cell != 0 { gsub(/[ ]+/," "); print }; END { print "\n"}'`"
+		END  { print "\n" }'`
+		test -z "${NETWORK_ENCRYPTION[$NETWORK_NR]}" && NETWORK_ENCRYPTION[$NETWORK_NR]="[WEP]"
+	else
+		NETWORK_ENCRYPTION[$NETWORK_NR]="[OPN]"
+	fi
+		done <<< "`echo "$SCAN_RESULTS" | awk 'BEGIN { ORS=""; cell=0 }; $2 > 1 && $1 == "Cell" { print "\n" }; $1 == "Cell" { cell=$2; gsub(/^[ ]+/,"") }; cell != 0 { gsub(/[ ]+/," "); print }; END { print "\n"}'`"
 }
 
 function networklist_show() {
-#dialog --backtitle "$TITLE ($IFACE)" --infobox "  Scanning..." 3 20
-networklist_scan
-while true; do
+	networklist_scan
+	while true; do
 	unset NETWORKS
 	while [ "$NETWORK_NR" -gt 0 ]; do
 		NETWORKS="$NETWORKS `printf '\"%s\" \"%3s %16s %2s %s\"' "${NETWORK_ESSID[$NETWORK_NR]}" ${NETWORK_QUALITY[$NETWORK_NR]} ${NETWORK_ADDRESS[$NETWORK_NR]} ${NETWORK_CHANNEL[$NETWORK_NR]} "${NETWORK_ENCRYPTION[$NETWORK_NR]}"`"
@@ -168,52 +184,43 @@ while true; do
 	test "$?" = "0" || echo "Abort" >$TMPFILE
 	case `cat $TMPFILE` in
 		"--- Rescan ---")
-		dialog --backtitle "$TITLE ($IFACE)" --infobox "  Scanning..." 3 20
-		networklist_scan
-		;;
+			networklist_show
+			;;
 		"Abort")
-		return 0
-		;;
+			return 0
+			;;
 		*)
-		for I in `seq 1 ${#NETWORK_ESSID[*]}`; do
-			if [ "${NETWORK_ESSID[$I]}" = "`cat $TMPFILE`" ]; then
+			for I in `seq 1 ${#NETWORK_ESSID[*]}`; do
+				if [ "${NETWORK_ESSID[$I]}" = "`cat $TMPFILE`" ]; then
 				# TODO network_connect returns 0 or 1 -> do something?
-				network_connect "${NETWORK_ESSID[$I]}" "${NETWORK_ENCRYPTION[$I]}"
-				break
-			fi
-		done
-		return 0
-		;;
+					network_connect "${NETWORK_ESSID[$I]}" "${NETWORK_ENCRYPTION[$I]}"
+					break
+				fi
+			done
+			return 0
+			;;
 	esac
-done
+	done
 }
 
 function network_connect() {
-# $1 - ESSID
-# $2 - ENCRYPTION ([OPN]|[WEP]|[WPA-PSK]|[WPA-EAP])
-# $3 - KEY (optional)
-# received ESSID and ENCRYPTION as argument, did we?
-test -z "$1" -o -z "$2" && { ERRORMSG="Error: No ESSID or ENCRPYTION passed to network_connect()!"; return 1; }
+	# $1 - ESSID
+	# $2 - ENCRYPTION ([OPN]|[WEP]|[WPA-PSK]|[WPA-EAP])
+	# $3 - KEY (optional)
+	# received ESSID and ENCRYPTION as argument, did we?
+	test -z "$1" -o -z "$2" && { ERRORMSG="Error: No ESSID or ENCRPYTION passed to network_connect()!"; return 1; }
 	KEY=$3
 	local NETWORK_ID
-	# general wpa_supplicant check (we should use it, if it's running)
-	wpa_supplicant_check
 	test "$?" = "2" && { dialog --backtitle "$TITLE ($IFACE)" --msgbox "More than one instance of wpa_supplicant is running. Use the "kill" option in the main menu to terminate some of them."; return 1; }
 	if [ "$?" = "0" ]; then WPA_SUPPLICANT_AVAIL="yes"; else WPA_SUPPLICANT_AVAIL=; fi
 	# filter for encryption type
 	case "`echo "$2" | awk '{ if ($0 ~ /WPA/) { print "[WPA]" } else { print } }'`" in
 		"[OPN]")
-			if [ "$WPA_SUPPLICANT_AVAIL" ]; then
-				wpa_supplicant_networkid_get "$1"
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID ssid "\"$1\"" >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID key_mgmt NONE >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS select_network $NETWORK_ID >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS reassociate >/dev/null 2>&1
-			else
-				# the simple way
-				$IWCONFIG $IFACE essid "$1" >/dev/null 2>&1
-				$IWCONFIG $IFACE key off >/dev/null 2>&1
-			fi
+			wpa_supplicant_networkid_get "$1"
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID ssid "\"$1\"" >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID key_mgmt NONE >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS select_network $NETWORK_ID >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS reassociate >/dev/null 2>&1
 			return 0
 			;;
 		"[WEP]")
@@ -230,18 +237,13 @@ test -z "$1" -o -z "$2" && { ERRORMSG="Error: No ESSID or ENCRPYTION passed to n
 				KEY=`cat $TMPFILE`
 			done
 			dialog --backtitle "$TITLE ($IFACE)" --infobox "  Connecting" 3 20
-			if [ "$WPA_SUPPLICANT_AVAIL" ]; then
-				wpa_supplicant_networkid_get "$1"
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID ssid "\"$1\"" >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID key_mgmt NONE >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID wep_key0 $KEY >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID wep_tx_keyidx 0 >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS select_network $NETWORK_ID >/dev/null 2>&1
-				$WPA_CLI $WPA_CLI_OPTS reassociate >/dev/null 2>&1
-			else
-				$IWCONFIG $IFACE essid "$1" >/dev/null 2>&1
-				$IWCONFIG $IFACE key $KEY >/dev/null 2>&1
-			fi
+			wpa_supplicant_networkid_get "$1"
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID ssid "\"$1\"" >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID key_mgmt NONE >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID wep_key0 $KEY >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID wep_tx_keyidx 0 >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS select_network $NETWORK_ID >/dev/null 2>&1
+			$WPA_CLI $WPA_CLI_OPTS reassociate >/dev/null 2>&1
 			return 0
 			;;
 		"[WPA]")
@@ -253,13 +255,7 @@ test -z "$1" -o -z "$2" && { ERRORMSG="Error: No ESSID or ENCRPYTION passed to n
 				KEY=`cat $TMPFILE`
 			done
 			dialog --backtitle "$TITLE ($IFACE)" --infobox "  Connecting" 3 20
-			if [ -z "$WPA_SUPPLICANT_AVAIL" ]; then
-				# launch our own wpa_supplicant and inform the user
-				$SAMEN_SERVICE start > /dev/null 2>&1
-				sleep 2
-				# TODO is it running now?
-				WPA_CLI_OPTS="-i $IFACE -p $WPA_SUPPLICANT_SOCKETDIR"
-			fi
+			WPA_CLI_OPTS="-i $IFACE -p $WPA_SUPPLICANT_SOCKETDIR"
 			# finally initiate connection
 			wpa_supplicant_networkid_get "$1"
 			$WPA_CLI $WPA_CLI_OPTS set_network $NETWORK_ID ssid "\"$1\"" >/dev/null 2>&1
@@ -278,43 +274,12 @@ test -z "$1" -o -z "$2" && { ERRORMSG="Error: No ESSID or ENCRPYTION passed to n
 }
 
 function wpa_supplicant_save() {
+	dialog --backtitle "$TITLE ($IFACE)" --infobox "  Saving..." 3 20
 	$WPA_CLI $WPA_CLI_OPTS save_config >/dev/null 2>&1
 	if [ "$?" == "0" ]; then
 		return 0
 	fi
 	dialog --backtitle "$TITLE ($IFACE)" --title "Error" --msgbox "Error: Could not save wpa_supplicant config" 5 47
-	return 1
-}
-
-function wpa_supplicant_check() {
-	# returns 0/true if a instance of wpa_supplicant with usable socket is running
-	# return state is 2, if two ore more instances of wpa_supplicant are running on the same $IFACE
-	# TODO WPA_CLI="$WPA_CLI_BIN $WPA_CLI_OPTS"
-	TMP=`ps ax | grep wpa_supplicant | awk '$5 ~ /wpa_supplicant/ && $0 ~ /-i/ { print }'`
-	if [ "`echo "$TMP" | wc -l`" -gt 1 ]; then
-		return 2
-	fi
-	if [ "`echo $TMP | sed -n 's/.*-i[ ]*\([a-zA-Z0-9]*\).*/\1/p'`" = "$IFACE" ]; then
-		WPA_CLI_OPTS="-i $IFACE"
-		$WPA_CLI $WPA_CLI_OPTS status >/dev/null 2>&1
-		if [ "$?" != "0" ]; then
-			# wpa_cli can't connect to the wpa_supplicant socket, try to find a usable one on the command line (-C)
-			WPA_SUPPLICANT_CTRL="`echo $TMP | awk '$0 ~ /-C/ { print }' | sed -n 's/.*-C[ ]*\([^ ]*\).*/\1/p'`"
-			if [ "$WPA_SUPPLICANT_CTRL" ]; then
-				# does wpa_cli work now?
-				WPA_CLI_OPTS="$WPA_CLI_OPTS -p $WPA_SUPPLICANT_CTRL"
-				$WPA_CLI $WPA_CLI_OPTS status >/dev/null 2>&1
-				if [ "$?" != "0" ]; then
-					ERRORMSG="Error: wpa_supplicant is running on $IFACE, but it has no useable control socket!"
-					cleanup
-				else
-					return 0
-				fi
-			fi
-		else
-			return 0
-		fi
-	fi
 	return 1
 }
 
@@ -336,12 +301,29 @@ function wpa_supplicant_networkid_get() {
 
 function samen_service_kill() {
 	# kills already running samen daemon
-	$SAMEN_SERVICE stop > /dev/null
+	samen_service_alive
+	if [ $? -eq 1 ]; then
+		dialog --backtitle "$TITLE ($IFACE)" --infobox "  Stopping Samen Service" 3 20
+		$SAMEN_SERVICE stop > /dev/null
+		sleep 5
+	fi
 }
 
 function samen_service_start() {
 	# (re)starts samen service daemon
-	$SAMEN_SERVICE restart > /dev/null
+	samen_service_kill
+	dialog --backtitle "$TITLE ($IFACE)" --infobox "  Starting Samen Service" 3 20
+	$SAMEN_SERVICE start > /dev/null
+	sleep 5
+}
+
+function samen_service_alive() {
+	ps ax | grep samen-handler | grep $IFACE | grep -v grep > /dev/null 2>&1
+	if [ $? -eq 0 ]; then
+		return 1
+	else
+		return 0
+	fi
 }
 
 function status_get() {
@@ -349,34 +331,17 @@ function status_get() {
 	# reset old ones
 	unset STATUS_INTERFACE STATUS_BSSID STATUS_ESSID STATUS_ENCRYPTION STATUS_WPA_SUPPLICANT STATUS_WPA_STATE STATUS_WPA_GROUP_CIPHER STATUS_WPA_PAIRWISE_CIPHER 
 	STATUS_INTERFACE=$IFACE
-	wpa_supplicant_check
-	if [ "$?" = "0" ]; then
-		# we can use wpa_cli to obtain information
-		TMP=`$WPA_CLI $WPA_CLI_OPTS status 2>&1`
-		STATUS_BSSID=`echo $TMP | sed -n 's/.*bssid=\([^ ]*\).*/\1/p'`
-		STATUS_ESSID=`echo $TMP | sed -n 's/.*ssid=\([^ ]*\).*/\1/p'`
-		STATUS_WPA_SUPPLICANT="yes"
-		STATUS_WPA_STATE=`echo $TMP | sed -n 's/.*wpa_state=\([^ ]*\).*/\1/p'`
-		STATUS_WPA_GROUP_CIPHER=`echo $TMP | sed -n 's/.*group_cipher=\([^ ]*\).*/\1/p'`
-		STATUS_WPA_PAIRWISE_CIPHER=`echo $TMP | sed -n 's/.*pairwise_cipher=\([^ ]*\).*/\1/p'`
-		if [ "`echo $TMP | sed -n 's/.*key_mgmt=\([^ ]*\).*/\1/p'`" = "NONE" ]; then
-			if [ "$STATUS_WPA_GROUP_CIPHER" ]; then
-				STATUS_ENCRYPTION="WEP"
-			else
-				STATUS_ENCRYPTION="OPN"
-			fi
-		fi
-	else
-		# no useable wpa_supplicant running: use iwconfig
-		TMP=`$IWCONFIG $IFACE 2>&1`
-		STATUS_BSSID=`echo $TMP | sed -n 's/.*Access Point:[ ]*\([^ ]*\).*/\1/p'`
-		STATUS_ESSID=`echo $TMP | sed -n 's/.*ESSID:[ ]*"\([^ ]*\)".*/\1/p'`
-		if [ "`echo $TMP | awk '$0 ~ /Encryption key:/'`" ]; then
-			if [ "`echo $TMP | sed -n 's/.*Encryption key:[ ]*\([^ ]*\).*/\1/p'`" = "off" ]; then
-				STATUS_ENCRYPTION="OPN"
-			else
-				STATUS_ENCRYPTION="WEP"
-			fi
+	# we can use wpa_cli to obtain information
+	TMP=`$WPA_CLI $WPA_CLI_OPTS status 2>&1`
+	STATUS_BSSID=`echo $TMP | sed -n 's/.*bssid=\([^ ]*\).*/\1/p'`
+	STATUS_ESSID=`echo $TMP | sed -n 's/.*ssid=\([^ ]*\).*/\1/p'`
+	STATUS_WPA_STATE=`echo $TMP | sed -n 's/.*wpa_state=\([^ ]*\).*/\1/p'`
+	STATUS_WPA_GROUP_CIPHER=`echo $TMP | sed -n 's/.*group_cipher=\([^ ]*\).*/\1/p'`
+	STATUS_WPA_PAIRWISE_CIPHER=`echo $TMP | sed -n 's/.*pairwise_cipher=\([^ ]*\).*/\1/p'`
+	STATUS_ENCRYPTION=`echo $TMP | sed -n 's/.*key_mgmt=\([^ ]*\).*/\1/p'`
+	if [ "`echo $TMP | sed -n 's/.*key_mgmt=\([^ ]*\).*/\1/p'`" = "NONE" ]; then
+		if [ "$STATUS_WPA_GROUP_CIPHER" ]; then
+			STATUS_ENCRYPTION="WEP"
 		else
 			STATUS_ENCRYPTION="OPN"
 		fi
@@ -385,41 +350,37 @@ function status_get() {
 
 function status_show() {
 	status_get
-	if [ "$STATUS_WPA_SUPPLICANT" ]; then
-		dialog --backtitle "$TITLE ($IFACE)" --title "Connection status" --msgbox " Interface: $STATUS_INTERFACE\n BSSID: $STATUS_BSSID\n ESSID: $STATUS_ESSID\n Encryption: $STATUS_ENCRYPTION\n wpa_supplicant: on\n State: $STATUS_WPA_STATE\n Group Cipher: $STATUS_WPA_GROUP_CIPHER\n Pairwise Cipher: $STATUS_WPA_PAIRWISE_CIPHER" 13 40
-	else
-		dialog --backtitle "$TITLE ($IFACE)" --title "Connection status" --msgbox " Interface: $STATUS_INTERFACE\n BSSID: $STATUS_BSSID\n ESSID: $STATUS_ESSID\n Encryption: $STATUS_ENCRYPTION\n wpa_supplicant: off" 13 40
-	fi
+	dialog --backtitle "$TITLE ($IFACE)" --title "Connection status" --msgbox " Interface: $STATUS_INTERFACE\n BSSID: $STATUS_BSSID\n ESSID: $STATUS_ESSID\n Encryption: $STATUS_ENCRYPTION\n State: $STATUS_WPA_STATE\n Group Cipher: $STATUS_WPA_GROUP_CIPHER\n Pairwise Cipher: $STATUS_WPA_PAIRWISE_CIPHER" 13 40
 }
 		
 function network_add_show() {
-		dialog --backtitle "$TITLE ($IFACE)" --menu "Choose encryption type!" 20 30 15 "OPEN" "" "WEP" "" "WPA[2]-PSK" "" 2>$TMPFILE
-		case "`cat $TMPFILE`" in
-			"OPEN")
-				dialog --backtitle "$TITLE ($IFACE)" --title "Add network (OPEN)" --form "Input connection data" 8 100 1 "ESSID" 0 0 "" 0 10 40 40 2>$TMPFILE
-				ESSID="`cat $TMPFILE | head -1`"
-				network_connect "$ESSID" "[OPN]"
-				;;
-			"WEP")
-				dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WEP)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
-				ESSID="`cat $TMPFILE | head -1`"
-				KEY="`cat $TMPFILE | tail -1`"
-				network_connect "$ESSID" "[WEP]" "$KEY"
-				;;
-			"WPA[2]-PSK")
-				dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WPA[2]-PSK)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
-				ESSID="`cat $TMPFILE | head -1`"
-				KEY="`cat $TMPFILE | tail -1`"
-				network_connect "$ESSID" "[WPA-PSK]" "$KEY"
-				;;
-			#"WPA[2]-EAP")
-				## TODO
-				#dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WPA[2]-EAP)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
-				#ESSID="`cat $TMPFILE | head -1`"
-				#KEY="`cat $TMPFILE | tail -1`"
-				#network_connect "$ESSID" "[WPA-EAP]" "$KEY"
-				#;;
-			esac
+	dialog --backtitle "$TITLE ($IFACE)" --menu "Choose encryption type!" 20 30 15 "OPEN" "" "WEP" "" "WPA[2]-PSK" "" 2>$TMPFILE
+	case "`cat $TMPFILE`" in
+		"OPEN")
+			dialog --backtitle "$TITLE ($IFACE)" --title "Add network (OPEN)" --form "Input connection data" 8 100 1 "ESSID" 0 0 "" 0 10 40 40 2>$TMPFILE
+			ESSID="`cat $TMPFILE | head -1`"
+			network_connect "$ESSID" "[OPN]"
+			;;
+		"WEP")
+			dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WEP)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
+			ESSID="`cat $TMPFILE | head -1`"
+			KEY="`cat $TMPFILE | tail -1`"
+			network_connect "$ESSID" "[WEP]" "$KEY"
+			;;
+		"WPA[2]-PSK")
+			dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WPA[2]-PSK)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
+			ESSID="`cat $TMPFILE | head -1`"
+			KEY="`cat $TMPFILE | tail -1`"
+			network_connect "$ESSID" "[WPA-PSK]" "$KEY"
+			;;
+		#"WPA[2]-EAP")
+			## TODO
+			#dialog --backtitle "$TITLE ($IFACE)" --title "Add network (WPA[2]-EAP)" --form "Input connection data" 10 100 3 "ESSID" 0 0 "" 0 10 40 40 "Key" 3 0 "" 3 10 80 128 2>$TMPFILE
+			#ESSID="`cat $TMPFILE | head -1`"
+			#KEY="`cat $TMPFILE | tail -1`"
+			#network_connect "$ESSID" "[WPA-EAP]" "$KEY"
+			#;;
+		esac
 }
 
 function cleanup() {
@@ -438,4 +399,3 @@ superuser_check || cleanup
 environment_set || cleanup
 commandline_process $1 || cleanup
 mainmenu_show
-#TODO check for 'sed' and 'awk'

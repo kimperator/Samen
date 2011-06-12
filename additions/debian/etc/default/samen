@@ -1,0 +1,4 @@
+INTERFACE="wlan0" # the interface wpa_supplicant listens on
+DRIVER="wext"     # the driver wpa_supplicant uses
+EXTRA_ARGS=""       # extra arguments for wpa_supplicant
+CONFIG_FILE="/etc/wpa_supplicant.conf" #wpa_supplicant config file
