@@ -36,7 +36,7 @@ do_start()
 	fi
 	ifconfig $INTERFACE up > /dev/null 2>&1
 	wpa_supplicant -D$DRIVER -i$INTERFACE -c$CONFIG_FILE $EXTRA_ARGS -B > /dev/null 2>&1
-	wpa_cli -i$INTERFACE -B -a /usr/sbin/samen-handler > /dev/null 2>&1
+	wpa_cli -i$INTERFACE -B -a /usr/local/sbin/samen-handler > /dev/null 2>&1
 	if [ $? -gt 0 ]; then
 		return 2
 	fi
