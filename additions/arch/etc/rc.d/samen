@@ -16,7 +16,7 @@ case "$1" in
     fi
     ifconfig $INTERFACE up > /dev/null 2>&1
     wpa_supplicant -D$DRIVER -i$INTERFACE -c$CONFIG_FILE $EXTRA_ARGS -B > /dev/null 2>&1
-    wpa_cli -B -a /usr/local/sbin/samen-handler > /dev/null 2>&1
+    wpa_cli -i$INTERFACE -B -a /usr/local/sbin/samen-handler > /dev/null 2>&1
     if [ $? -gt 0 ]; then
       stat_die
     else
@@ -27,7 +27,8 @@ case "$1" in
 
   stop)
     stat_busy "Stopping $daemon_name"
-    killall wpa_supplicant > /dev/null 2>&1
+    kill `ps ax | grep wpa_supplicant | grep -- "-i$INTERFACE" | grep -v grep | awk '{print $1}'` > /dev/null 2>&1
+    kill `ps ax | grep "wpa_cli" | grep -- "-i$INTERFACE" | grep samen-handler | grep -v grep | awk '{print $1}'` > /dev/null 2>&1
     if [ $? -gt 0 ]; then
       stat_die
     else

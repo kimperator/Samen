@@ -53,8 +53,8 @@ do_stop()
 	#   1 if daemon was already stopped
 	#   2 if daemon could not be stopped
 	#   other if a failure occurred
-	kill `ps ax | grep wpa_supplicant | grep $INTERFACE | grep -v grep | awk '{print $1}'` > /dev/null 2>&1
-	#killall wpa_supplicant > /dev/null 2>&1
+	kill `ps ax | grep wpa_supplicant | grep -- "-i$INTERFACE" | grep -v grep | awk '{print $1}'` > /dev/null 2>&1
+	kill `ps ax | grep "wpa_cli" | grep -- "-i$INTERFACE" | grep samen-handler | grep -v grep | awk '{print $1}'` > /dev/null 2>&1
 	ifconfig $INTERFACE down > /dev/null 2>&1
 	RETVAL="$?"
 	[ "$RETVAL" = 2 ] && return 2
